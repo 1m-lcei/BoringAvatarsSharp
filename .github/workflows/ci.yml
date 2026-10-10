@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build the drop-in source
+        run: >-
+          dotnet build src/BoringAvatarsSharp/AvatarGenerator.cs --configuration Release
+          -p:OutputType=Library -p:PublishAot=false
+          -p:ImplicitUsings=disable -p:TreatWarningsAsErrors=true
+      - name: Test the drop-in source
+        run: dotnet run --file test.cs --configuration Release
+      - name: Generate and validate the sample gallery
+        run: dotnet run --file sandbox/Program.cs --configuration Release
+      - name: Check that the sample gallery is up to date
+        run: git diff --exit-code -- sandbox/output

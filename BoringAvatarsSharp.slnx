@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path=".editorconfig" />
+    <File Path=".gitattributes" />
+    <File Path=".gitignore" />
+    <File Path="LICENSE" />
+    <File Path="THIRD-PARTY-NOTICES.md" />
+    <File Path="README.md" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/BoringAvatarsSharp/BoringAvatarsSharp.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BoringAvatarsSharp.Tests.csproj" />
+  </Folder>
+</Solution>
