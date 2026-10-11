@@ -1,4 +1,4 @@
-// BoringAvatarsSharp v0.1.0 — SVG styles adapted from https://github.com/boringdesigners/boring-avatars
+// BoringAvatarsSharp v0.2.0 — SVG styles adapted from https://github.com/boringdesigners/boring-avatars
 // MIT License
 // Copyright (c) 2026 1m-lcei
 // Copyright (c) 2021 boringdesigners

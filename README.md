@@ -1,6 +1,6 @@
 # BoringAvatarsSharp
 
-[![CI](https://github.com/1m-lcei/BoringAvatarsSharp/actions/workflows/ci.yml/badge.svg)](https://github.com/1m-lcei/BoringAvatarsSharp/actions/workflows/ci.yml) ![Version 0.1.0](https://img.shields.io/badge/version-0.1.0-blue)
+[![CI](https://github.com/1m-lcei/BoringAvatarsSharp/actions/workflows/ci.yml/badge.svg)](https://github.com/1m-lcei/BoringAvatarsSharp/actions/workflows/ci.yml) ![Version](https://img.shields.io/badge/dynamic/xml?url=https%3A%2F%2Fraw.githubusercontent.com%2F1m-lcei%2FBoringAvatarsSharp%2Fmain%2Fsrc%2FBoringAvatarsSharp%2FBoringAvatarsSharp.csproj&query=%2FProject%2FPropertyGroup%2FVersion&label=version&color=blue)
 
 A C# SVG avatar generator with six styles: **Marble**, **Beam**, **Pixel**, **Sunset**, **Ring**, and **Bauhaus**. No runtime packages, network calls, or image libraries are required.
 
