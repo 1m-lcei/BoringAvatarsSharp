@@ -8,10 +8,15 @@ internal sealed class RotatingBufferWriter : IBufferWriter<byte>
     private byte[] _current = [];
 
     public ReadOnlySpan<byte> WrittenSpan => _output.WrittenSpan;
+    public int BufferRequests { get; private set; }
+    public int AdvanceCalls { get; private set; }
+    public int LargestSizeHint { get; private set; }
 
     public Memory<byte> GetMemory(int sizeHint = 0)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(sizeHint);
+        BufferRequests++;
+        LargestSizeHint = Math.Max(LargestSizeHint, sizeHint);
         _current = new byte[Math.Max(sizeHint, 1)];
         return _current;
     }
@@ -22,6 +27,7 @@ internal sealed class RotatingBufferWriter : IBufferWriter<byte>
     {
         ArgumentOutOfRangeException.ThrowIfNegative(count);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(count, _current.Length);
+        AdvanceCalls++;
         _output.Write(_current.AsSpan(0, count));
         // Poison returned memory to detect use of a span after Advance.
         _current.AsSpan().Fill(0xFF);

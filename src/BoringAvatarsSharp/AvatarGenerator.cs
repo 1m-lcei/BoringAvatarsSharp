@@ -59,7 +59,7 @@ public static class AvatarGenerator
     /// <param name="includeTitle">Whether to include the name in an SVG title element.</param>
     /// <param name="colors">Optional RGB colors in 0xRRGGBB form. An empty span uses the default palette.</param>
     /// <returns>A self-contained SVG document.</returns>
-    /// <remarks>Uses <see cref="WriteSvg(IBufferWriter{byte}, ReadOnlySpan{byte}, AvatarVariant, int, bool, bool, ReadOnlySpan{uint})"/> for generation and validation, including its fixed element IDs. Temporary output buffers are pooled and returned even if generation fails.</remarks>
+    /// <remarks>Shares generation and validation with <see cref="WriteSvg(IBufferWriter{byte}, ReadOnlySpan{byte}, AvatarVariant, int, bool, bool, ReadOnlySpan{uint})"/>, including its fixed element IDs. A temporary output buffer is pooled and returned even if generation fails.</remarks>
     /// <exception cref="ArgumentException">The name contains invalid UTF-8 or an invalid XML character.</exception>
     /// <exception cref="ArgumentOutOfRangeException">The size is not positive, the variant is unknown, or a color is outside the RGB range.</exception>
     public static string GetSvg(
@@ -70,9 +70,20 @@ public static class AvatarGenerator
         bool includeTitle = false,
         ReadOnlySpan<uint> colors = default)
     {
-        using var output = new ArrayPoolBufferWriter<byte>();
-        WriteSvg(output, name, variant, size, square, includeTitle, colors);
-        return Encoding.UTF8.GetString(output.WrittenSpan);
+        ValidateOptions(variant, size, colors);
+        ulong seed = ValidateAndHashName(name, out long escapedLength);
+        int capacity = checked((int)GetMaxSvgLength(variant, includeTitle, escapedLength));
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(capacity);
+        try
+        {
+            var output = new SvgWriter(buffer);
+            WriteSvgCore(ref output, name, seed, variant, size, square, includeTitle, colors);
+            return Encoding.UTF8.GetString(buffer.AsSpan(0, output.WrittenCount));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     /// <summary>Returns a complete SVG avatar as a string from a UTF-16 encoded name.</summary>
@@ -83,7 +94,7 @@ public static class AvatarGenerator
     /// <param name="includeTitle">Whether to include the name in an SVG title element.</param>
     /// <param name="colors">Optional RGB colors in 0xRRGGBB form. An empty span uses the default palette.</param>
     /// <returns>A self-contained SVG document.</returns>
-    /// <remarks>Uses <see cref="WriteSvg(IBufferWriter{byte}, ReadOnlySpan{char}, AvatarVariant, int, bool, bool, ReadOnlySpan{uint})"/> for generation and validation, including its fixed element IDs. Equivalent UTF-8 and UTF-16 names with the same options produce identical strings. Temporary output buffers are pooled and returned even if generation fails.</remarks>
+    /// <remarks>Shares generation and validation with <see cref="WriteSvg(IBufferWriter{byte}, ReadOnlySpan{char}, AvatarVariant, int, bool, bool, ReadOnlySpan{uint})"/>, including its fixed element IDs. Equivalent UTF-8 and UTF-16 names with the same options produce identical strings. Temporary buffers are pooled and returned even if generation fails.</remarks>
     /// <exception cref="ArgumentException">The name contains invalid UTF-16 or an invalid XML character.</exception>
     /// <exception cref="ArgumentOutOfRangeException">The size is not positive, the variant is unknown, or a color is outside the RGB range.</exception>
     public static string GetSvg(
@@ -94,55 +105,19 @@ public static class AvatarGenerator
         bool includeTitle = false,
         ReadOnlySpan<uint> colors = default)
     {
-        using var output = new ArrayPoolBufferWriter<byte>();
-        WriteSvg(output, name, variant, size, square, includeTitle, colors);
-        return Encoding.UTF8.GetString(output.WrittenSpan);
-    }
-
-    private sealed class ArrayPoolBufferWriter<T> : IBufferWriter<T>, IDisposable
-    {
-        private T[] _buffer = ArrayPool<T>.Shared.Rent(1024);
-        private int _written;
-
-        public ReadOnlySpan<T> WrittenSpan => _buffer.AsSpan(0, _written);
-
-        public Memory<T> GetMemory(int sizeHint = 0)
+        byte[]? rented = null;
+        try
         {
-            EnsureCapacity(sizeHint);
-            return _buffer.AsMemory(_written);
+            ReadOnlySpan<byte> utf8Name = EncodeName(name, stackalloc byte[512], out rented);
+            return GetSvg(utf8Name, variant, size, square, includeTitle, colors);
         }
-
-        public Span<T> GetSpan(int sizeHint = 0)
+        finally
         {
-            EnsureCapacity(sizeHint);
-            return _buffer.AsSpan(_written);
-        }
-
-        public void Advance(int count)
-        {
-            ArgumentOutOfRangeException.ThrowIfNegative(count);
-            ArgumentOutOfRangeException.ThrowIfGreaterThan(count, _buffer.Length - _written);
-            _written += count;
-        }
-
-        private void EnsureCapacity(int sizeHint)
-        {
-            ArgumentOutOfRangeException.ThrowIfNegative(sizeHint);
-            sizeHint = Math.Max(sizeHint, 1);
-            if (sizeHint <= _buffer.Length - _written)
+            if (rented is not null)
             {
-                return;
+                ArrayPool<byte>.Shared.Return(rented);
             }
-
-            int capacity = (int)Math.Min((long)_buffer.Length * 2, Array.MaxLength);
-            T[] buffer = ArrayPool<T>.Shared.Rent(Math.Max(checked(_written + sizeHint), capacity));
-            WrittenSpan.CopyTo(buffer);
-            ArrayPool<T>.Shared.Return(_buffer);
-            _buffer = buffer;
         }
-
-        // shortcut: only used by GetSvg's using scope; add reuse/disposal guards if exposed elsewhere.
-        public void Dispose() => ArrayPool<T>.Shared.Return(_buffer);
     }
 
     /// <summary>Writes a complete SVG avatar as UTF-8 without a byte order mark.</summary>
@@ -164,25 +139,53 @@ public static class AvatarGenerator
         ReadOnlySpan<uint> colors = default)
     {
         ArgumentNullException.ThrowIfNull(destination);
+        ValidateOptions(variant, size, colors);
+        ulong seed = ValidateAndHashName(name, out long escapedLength);
+        long capacity = GetMaxSvgLength(variant, includeTitle, escapedLength);
+        // Bound contiguous requests for exceptionally long names while batching ordinary SVGs.
+        var output = new SvgWriter(destination.GetSpan((int)Math.Min(capacity, 65536)), destination);
+        WriteSvgCore(ref output, name, seed, variant, size, square, includeTitle, colors);
+        destination.Advance(output.WrittenCount);
+    }
+
+    private static void ValidateOptions(AvatarVariant variant, int size, ReadOnlySpan<uint> colors)
+    {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(size);
         if (!Enum.IsDefined(variant))
         {
             throw new ArgumentOutOfRangeException(nameof(variant));
         }
 
+        foreach (uint color in colors)
+        {
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(color, 0xFFFFFFu, nameof(colors));
+        }
+    }
+
+    private static long GetMaxSvgLength(AvatarVariant variant, bool includeTitle, long escapedLength)
+    {
+        // The frame bound includes 10-digit sizes and round clipping; recheck when SVG output changes.
+        int drawingLength = variant switch
+        {
+            AvatarVariant.Marble => 848, // Frame 236 + drawing 604 = 840 bytes.
+            AvatarVariant.Beam => 672, // Frame 236 + drawing 423 = 659 bytes.
+            AvatarVariant.Pixel => 4000, // Frame 236 + drawing 3760 = 3996 bytes.
+            AvatarVariant.Sunset => 680, // Frame 236 + drawing 437 = 673 bytes.
+            AvatarVariant.Ring => 688, // Frame 236 + drawing 446 = 682 bytes.
+            _ => 600 // Frame 236 + drawing 352 = 588 bytes (Bauhaus).
+        };
+        return drawingLength + escapedLength * (includeTitle ? 2 : 1) + (includeTitle ? 15 : 0);
+    }
+
+    private static void WriteSvgCore(
+        ref SvgWriter destination, ReadOnlySpan<byte> name, ulong seed, AvatarVariant variant,
+        int size, bool square, bool includeTitle, ReadOnlySpan<uint> colors)
+    {
         if (colors.IsEmpty)
         {
             colors = [0x92A1C6, 0x146A7C, 0xF0AB3D, 0xC271B4, 0xC20D90];
         }
-        else
-        {
-            foreach (uint color in colors)
-            {
-                ArgumentOutOfRangeException.ThrowIfGreaterThan(color, 0xFFFFFFu, nameof(colors));
-            }
-        }
 
-        ulong seed = ValidateAndHashName(name);
         int viewSize = variant switch
         {
             AvatarVariant.Beam => 36,
@@ -191,42 +194,42 @@ public static class AvatarGenerator
         };
 
         destination.Write("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 "u8);
-        WriteNumber(destination, viewSize);
+        WriteNumber(ref destination, viewSize);
         destination.Write(" "u8);
-        WriteNumber(destination, viewSize);
+        WriteNumber(ref destination, viewSize);
         destination.Write("\" width=\""u8);
-        WriteNumber(destination, size);
+        WriteNumber(ref destination, size);
         destination.Write("\" height=\""u8);
-        WriteNumber(destination, size);
+        WriteNumber(ref destination, size);
         destination.Write("\" role=\"img\" aria-label=\""u8);
-        WriteEscaped(destination, name);
+        WriteEscaped(ref destination, name);
         destination.Write("\">"u8);
         if (includeTitle)
         {
             destination.Write("<title>"u8);
-            WriteEscaped(destination, name);
+            WriteEscaped(ref destination, name);
             destination.Write("</title>"u8);
         }
 
         destination.Write("<defs><clipPath id=\"c\"><rect width=\""u8);
-        WriteNumber(destination, viewSize);
+        WriteNumber(ref destination, viewSize);
         destination.Write("\" height=\""u8);
-        WriteNumber(destination, viewSize);
+        WriteNumber(ref destination, viewSize);
         if (!square)
         {
             destination.Write("\" rx=\""u8);
-            WriteNumber(destination, viewSize / 2);
+            WriteNumber(ref destination, viewSize / 2);
         }
         destination.Write("\"/></clipPath></defs><g clip-path=\"url(#c)\">"u8);
 
         switch (variant)
         {
-            case AvatarVariant.Marble: Marble(destination, seed, colors); break;
-            case AvatarVariant.Beam: Beam(destination, seed, colors); break;
-            case AvatarVariant.Pixel: Pixel(destination, seed, colors); break;
-            case AvatarVariant.Sunset: Sunset(destination, seed, colors); break;
-            case AvatarVariant.Ring: Ring(destination, seed, colors); break;
-            case AvatarVariant.Bauhaus: Bauhaus(destination, seed, colors); break;
+            case AvatarVariant.Marble: Marble(ref destination, seed, colors); break;
+            case AvatarVariant.Beam: Beam(ref destination, seed, colors); break;
+            case AvatarVariant.Pixel: Pixel(ref destination, seed, colors); break;
+            case AvatarVariant.Sunset: Sunset(ref destination, seed, colors); break;
+            case AvatarVariant.Ring: Ring(ref destination, seed, colors); break;
+            case AvatarVariant.Bauhaus: Bauhaus(ref destination, seed, colors); break;
         }
 
         destination.Write("</g></svg>"u8);
@@ -251,19 +254,11 @@ public static class AvatarGenerator
         ReadOnlySpan<uint> colors = default)
     {
         ArgumentNullException.ThrowIfNull(destination);
-        int byteCount = Encoding.UTF8.GetByteCount(name);
         byte[]? rented = null;
-        Span<byte> utf8Name = byteCount <= 512
-            ? stackalloc byte[512]
-            : rented = ArrayPool<byte>.Shared.Rent(byteCount);
         try
         {
-            if (Utf8.FromUtf16(name, utf8Name, out _, out int written, replaceInvalidSequences: false) != OperationStatus.Done)
-            {
-                throw new ArgumentException("Name contains invalid UTF-16.", nameof(name));
-            }
-
-            WriteSvg(destination, utf8Name[..written], variant, size, square, includeTitle, colors);
+            ReadOnlySpan<byte> utf8Name = EncodeName(name, stackalloc byte[512], out rented);
+            WriteSvg(destination, utf8Name, variant, size, square, includeTitle, colors);
         }
         finally
         {
@@ -274,10 +269,23 @@ public static class AvatarGenerator
         }
     }
 
-    private static ulong ValidateAndHashName(ReadOnlySpan<byte> name)
+    private static ReadOnlySpan<byte> EncodeName(ReadOnlySpan<char> name, Span<byte> scratch, out byte[]? rented)
+    {
+        int byteCount = Encoding.UTF8.GetByteCount(name);
+        rented = byteCount > scratch.Length ? ArrayPool<byte>.Shared.Rent(byteCount) : null;
+        Span<byte> utf8Name = rented is null ? scratch : rented;
+        if (Utf8.FromUtf16(name, utf8Name, out _, out int written, replaceInvalidSequences: false) != OperationStatus.Done)
+        {
+            throw new ArgumentException("Name contains invalid UTF-16.", nameof(name));
+        }
+        return utf8Name[..written];
+    }
+
+    private static ulong ValidateAndHashName(ReadOnlySpan<byte> name, out long escapedLength)
     {
         // Validate during hashing so invalid input never reaches the destination.
         ulong hash = 14695981039346656037UL;
+        escapedLength = name.Length;
         while (!name.IsEmpty)
         {
             if (Rune.DecodeFromUtf8(name, out Rune rune, out int consumed) != OperationStatus.Done)
@@ -291,6 +299,14 @@ public static class AvatarGenerator
                 throw new ArgumentException("Name contains an invalid XML character.", nameof(name));
             }
 
+            escapedLength += value switch
+            {
+                '&' or '\t' or '\n' or '\r' => 4,
+                '<' or '>' => 3,
+                '"' or '\'' => 5,
+                _ => 0
+            };
+
             foreach (byte b in name[..consumed])
             {
                 hash = unchecked((hash ^ b) * 1099511628211UL);
@@ -299,6 +315,57 @@ public static class AvatarGenerator
             name = name[consumed..];
         }
         return hash;
+    }
+
+    private ref struct SvgWriter(Span<byte> buffer, IBufferWriter<byte>? destination = null)
+    {
+        private Span<byte> _remaining = buffer;
+        private readonly IBufferWriter<byte>? _destination = destination;
+        public int WrittenCount { get; private set; }
+        public readonly Span<byte> FreeSpan => _remaining;
+
+        public void Write(ReadOnlySpan<byte> value)
+        {
+            if (value.Length > _remaining.Length)
+            {
+                WriteChunked(value);
+                return;
+            }
+            value.CopyTo(_remaining);
+            Advance(value.Length);
+        }
+
+        // Keep chunking out of the hot path so writes of constant SVG fragments can inline.
+        private void WriteChunked(ReadOnlySpan<byte> value)
+        {
+            while (value.Length > _remaining.Length)
+            {
+                int length = _remaining.Length;
+                value[..length].CopyTo(_remaining);
+                Advance(length);
+                value = value[length..];
+                GetNextSpan(4096);
+            }
+            value.CopyTo(_remaining);
+            Advance(value.Length);
+        }
+
+        public void Advance(int count)
+        {
+            _remaining = _remaining[count..];
+            WrittenCount += count;
+        }
+
+        public void GetNextSpan(int sizeHint)
+        {
+            if (_destination is null)
+            {
+                throw new InvalidOperationException("SVG exceeded its estimated capacity.");
+            }
+            _destination.Advance(WrittenCount);
+            _remaining = _destination.GetSpan(Math.Max(sizeHint, 4096));
+            WrittenCount = 0;
+        }
     }
 
     private static int Next(ref ulong state, int exclusiveMax)
@@ -318,26 +385,27 @@ public static class AvatarGenerator
     private static uint NextColor(ref ulong state, ReadOnlySpan<uint> colors) =>
         colors[Next(ref state, colors.Length)];
 
-    private static void WriteColor(IBufferWriter<byte> destination, uint color)
+    private static void WriteColor(ref SvgWriter destination, uint color)
     {
         destination.Write("#"u8);
-        WriteNumber(destination, color, "X6");
+        WriteNumber(ref destination, color, "X6");
     }
 
-    private static void WriteNumber<T>(IBufferWriter<byte> destination, T value, ReadOnlySpan<char> format = default)
+    private static void WriteNumber<T>(ref SvgWriter destination, T value, ReadOnlySpan<char> format = default)
         where T : IUtf8SpanFormattable
     {
         int sizeHint = 32;
         int written;
-        while (!value.TryFormat(destination.GetSpan(sizeHint), out written, format, CultureInfo.InvariantCulture))
+        while (!value.TryFormat(destination.FreeSpan, out written, format, CultureInfo.InvariantCulture))
         {
+            destination.GetNextSpan(sizeHint);
             sizeHint = checked(sizeHint * 2);
         }
 
         destination.Advance(written);
     }
 
-    private static void WriteEscaped(IBufferWriter<byte> destination, ReadOnlySpan<byte> name)
+    private static void WriteEscaped(ref SvgWriter destination, ReadOnlySpan<byte> name)
     {
         int start = 0;
         for (int i = 0; i < name.Length; i++)
@@ -366,10 +434,10 @@ public static class AvatarGenerator
         destination.Write(name[start..]);
     }
 
-    private static void Marble(IBufferWriter<byte> destination, ulong state, ReadOnlySpan<uint> colors)
+    private static void Marble(ref SvgWriter destination, ulong state, ReadOnlySpan<uint> colors)
     {
         destination.Write("<rect width=\"80\" height=\"80\" fill=\""u8);
-        WriteColor(destination, NextColor(ref state, colors));
+        WriteColor(ref destination, NextColor(ref state, colors));
         destination.Write("\"/>"u8);
         for (int i = 0; i < 2; i++)
         {
@@ -378,7 +446,7 @@ public static class AvatarGenerator
                 ? "M32.414 59.35L50.376 70.5H72.5v-71H33.728L26.5 13.381l19.057 27.08L32.414 59.35z"u8
                 : "M22.216 24L0 46.75l14.108 38.129L78 86l-3.081-59.276-22.378 4.005 12.972 20.186-23.35 27.395L22.215 24z"u8);
             destination.Write("\" fill=\""u8);
-            WriteColor(destination, NextColor(ref state, colors));
+            WriteColor(ref destination, NextColor(ref state, colors));
             destination.Write("\" filter=\"url(#f)\""u8);
             if (i == 1)
             {
@@ -386,70 +454,81 @@ public static class AvatarGenerator
             }
 
             destination.Write(" transform=\"translate("u8);
-            WriteNumber(destination, Next(ref state, 15) - 7);
+            WriteNumber(ref destination, Next(ref state, 15) - 7);
             destination.Write(" "u8);
-            WriteNumber(destination, Next(ref state, 15) - 7);
+            WriteNumber(ref destination, Next(ref state, 15) - 7);
             destination.Write(") rotate("u8);
-            WriteNumber(destination, Next(ref state, 360));
+            WriteNumber(ref destination, Next(ref state, 360));
             destination.Write(" 40 40) scale("u8);
-            WriteNumber(destination, 1.2 + Next(ref state, 4) / 10d, "0.###");
+            destination.Write(Next(ref state, 4) switch
+            {
+                0 => "1.2"u8,
+                1 => "1.3"u8,
+                2 => "1.4"u8,
+                _ => "1.5"u8
+            });
             destination.Write(")\"/>"u8);
         }
         destination.Write("<defs><filter id=\"f\" x=\"-40\" y=\"-40\" width=\"160\" height=\"160\" filterUnits=\"userSpaceOnUse\"><feGaussianBlur stdDeviation=\"7\"/></filter></defs>"u8);
     }
 
-    private static void Beam(IBufferWriter<byte> destination, ulong state, ReadOnlySpan<uint> colors)
+    private static void Beam(ref SvgWriter destination, ulong state, ReadOnlySpan<uint> colors)
     {
         uint wrapper = NextColor(ref state, colors);
         int x = Next(ref state, 13) - 4;
         int y = Next(ref state, 13) - 4;
         uint face = Contrast(wrapper);
         destination.Write("<rect width=\"36\" height=\"36\" fill=\""u8);
-        WriteColor(destination, NextColor(ref state, colors));
+        WriteColor(ref destination, NextColor(ref state, colors));
         destination.Write("\"/><rect width=\"36\" height=\"36\" fill=\""u8);
-        WriteColor(destination, wrapper);
+        WriteColor(ref destination, wrapper);
         destination.Write("\" rx=\""u8);
-        WriteNumber(destination, Next(ref state, 2) == 0 ? 36 : 6);
+        WriteNumber(ref destination, Next(ref state, 2) == 0 ? 36 : 6);
         destination.Write("\" transform=\"translate("u8);
-        WriteNumber(destination, x);
+        WriteNumber(ref destination, x);
         destination.Write(" "u8);
-        WriteNumber(destination, y);
+        WriteNumber(ref destination, y);
         destination.Write(") rotate("u8);
-        WriteNumber(destination, Next(ref state, 360));
+        WriteNumber(ref destination, Next(ref state, 360));
         destination.Write(" 18 18) scale("u8);
-        WriteNumber(destination, 1 + Next(ref state, 3) / 10d, "0.###");
+        destination.Write(Next(ref state, 3) switch
+        {
+            0 => "1"u8,
+            1 => "1.1"u8,
+            _ => "1.2"u8
+        });
         destination.Write(")\"/><g transform=\"translate("u8);
-        WriteNumber(destination, x / 2);
+        WriteNumber(ref destination, x / 2);
         destination.Write(" "u8);
-        WriteNumber(destination, y / 2);
+        WriteNumber(ref destination, y / 2);
         destination.Write(") rotate("u8);
-        WriteNumber(destination, Next(ref state, 19) - 9);
+        WriteNumber(ref destination, Next(ref state, 19) - 9);
         destination.Write(" 18 18)\">"u8);
         if (Next(ref state, 2) == 0)
         {
             destination.Write("<path d=\"M15 "u8);
-            WriteNumber(destination, 19 + Next(ref state, 3));
+            WriteNumber(ref destination, 19 + Next(ref state, 3));
             destination.Write("c2 1 4 1 6 0\" fill=\"none\" stroke=\""u8);
-            WriteColor(destination, face);
+            WriteColor(ref destination, face);
             destination.Write("\" stroke-linecap=\"round\"/>"u8);
         }
         else
         {
             destination.Write("<path d=\"M13,"u8);
-            WriteNumber(destination, 19 + Next(ref state, 3));
+            WriteNumber(ref destination, 19 + Next(ref state, 3));
             destination.Write(" a1,0.75 0 0,0 10,0\" fill=\""u8);
-            WriteColor(destination, face);
+            WriteColor(ref destination, face);
             destination.Write("\"/>"u8);
         }
         int spread = Next(ref state, 5);
         destination.Write("<rect x=\""u8);
-        WriteNumber(destination, 14 - spread);
+        WriteNumber(ref destination, 14 - spread);
         destination.Write("\" y=\"14\" width=\"1.5\" height=\"2\" rx=\"1\" fill=\""u8);
-        WriteColor(destination, face);
+        WriteColor(ref destination, face);
         destination.Write("\"/><rect x=\""u8);
-        WriteNumber(destination, 20 + spread);
+        WriteNumber(ref destination, 20 + spread);
         destination.Write("\" y=\"14\" width=\"1.5\" height=\"2\" rx=\"1\" fill=\""u8);
-        WriteColor(destination, face);
+        WriteColor(ref destination, face);
         destination.Write("\"/></g>"u8);
     }
 
@@ -461,98 +540,98 @@ public static class AvatarGenerator
         return r * 299 + g * 587 + b * 114 >= 128000 ? 0x000000u : 0xFFFFFFu;
     }
 
-    private static void Pixel(IBufferWriter<byte> destination, ulong state, ReadOnlySpan<uint> colors)
+    private static void Pixel(ref SvgWriter destination, ulong state, ReadOnlySpan<uint> colors)
     {
         for (int y = 0; y < 8; y++)
         {
             for (int x = 0; x < 8; x++)
             {
                 destination.Write("<rect x=\""u8);
-                WriteNumber(destination, x * 10);
+                WriteNumber(ref destination, x * 10);
                 destination.Write("\" y=\""u8);
-                WriteNumber(destination, y * 10);
+                WriteNumber(ref destination, y * 10);
                 destination.Write("\" width=\"10\" height=\"10\" fill=\""u8);
-                WriteColor(destination, NextColor(ref state, colors));
+                WriteColor(ref destination, NextColor(ref state, colors));
                 destination.Write("\"/>"u8);
             }
         }
     }
 
-    private static void Sunset(IBufferWriter<byte> destination, ulong state, ReadOnlySpan<uint> colors)
+    private static void Sunset(ref SvgWriter destination, ulong state, ReadOnlySpan<uint> colors)
     {
         destination.Write("<path d=\"M0 0h80v40H0z\" fill=\"url(#g0)\"/><path d=\"M0 40h80v40H0z\" fill=\"url(#g1)\"/><defs>"u8);
         for (int i = 0; i < 2; i++)
         {
             destination.Write("<linearGradient id=\"g"u8);
-            WriteNumber(destination, i);
+            WriteNumber(ref destination, i);
             destination.Write("\" x1=\"40\" y1=\""u8);
-            WriteNumber(destination, i * 40);
+            WriteNumber(ref destination, i * 40);
             destination.Write("\" x2=\"40\" y2=\""u8);
-            WriteNumber(destination, (i + 1) * 40);
+            WriteNumber(ref destination, (i + 1) * 40);
             destination.Write("\" gradientUnits=\"userSpaceOnUse\"><stop stop-color=\""u8);
-            WriteColor(destination, NextColor(ref state, colors));
+            WriteColor(ref destination, NextColor(ref state, colors));
             destination.Write("\"/><stop offset=\"1\" stop-color=\""u8);
-            WriteColor(destination, NextColor(ref state, colors));
+            WriteColor(ref destination, NextColor(ref state, colors));
             destination.Write("\"/></linearGradient>"u8);
         }
         destination.Write("</defs>"u8);
     }
 
-    private static void Ring(IBufferWriter<byte> destination, ulong state, ReadOnlySpan<uint> colors)
+    private static void Ring(ref SvgWriter destination, ulong state, ReadOnlySpan<uint> colors)
     {
         uint c0 = NextColor(ref state, colors);
         uint c1 = NextColor(ref state, colors);
         uint c2 = NextColor(ref state, colors);
         uint c3 = NextColor(ref state, colors);
         destination.Write("<path d=\"M0 0h90v45H0z\" fill=\""u8);
-        WriteColor(destination, c0);
+        WriteColor(ref destination, c0);
         destination.Write("\"/><path d=\"M0 45h90v45H0z\" fill=\""u8);
-        WriteColor(destination, c1);
+        WriteColor(ref destination, c1);
         destination.Write("\"/><path d=\"M83 45a38 38 0 00-76 0h76z\" fill=\""u8);
-        WriteColor(destination, c1);
+        WriteColor(ref destination, c1);
         destination.Write("\"/><path d=\"M83 45a38 38 0 01-76 0h76z\" fill=\""u8);
-        WriteColor(destination, c2);
+        WriteColor(ref destination, c2);
         destination.Write("\"/><path d=\"M77 45a32 32 0 10-64 0h64z\" fill=\""u8);
-        WriteColor(destination, c2);
+        WriteColor(ref destination, c2);
         destination.Write("\"/><path d=\"M77 45a32 32 0 11-64 0h64z\" fill=\""u8);
-        WriteColor(destination, c3);
+        WriteColor(ref destination, c3);
         destination.Write("\"/><path d=\"M71 45a26 26 0 00-52 0h52z\" fill=\""u8);
-        WriteColor(destination, c3);
+        WriteColor(ref destination, c3);
         destination.Write("\"/><path d=\"M71 45a26 26 0 01-52 0h52z\" fill=\""u8);
-        WriteColor(destination, c0);
+        WriteColor(ref destination, c0);
         destination.Write("\"/><circle cx=\"45\" cy=\"45\" r=\"23\" fill=\""u8);
-        WriteColor(destination, NextColor(ref state, colors));
+        WriteColor(ref destination, NextColor(ref state, colors));
         destination.Write("\"/>"u8);
     }
 
-    private static void Bauhaus(IBufferWriter<byte> destination, ulong state, ReadOnlySpan<uint> colors)
+    private static void Bauhaus(ref SvgWriter destination, ulong state, ReadOnlySpan<uint> colors)
     {
         destination.Write("<rect width=\"80\" height=\"80\" fill=\""u8);
-        WriteColor(destination, NextColor(ref state, colors));
+        WriteColor(ref destination, NextColor(ref state, colors));
         destination.Write("\"/><rect x=\"10\" y=\"30\" width=\"80\" height=\""u8);
-        WriteNumber(destination, Next(ref state, 2) == 0 ? 80 : 10);
+        WriteNumber(ref destination, Next(ref state, 2) == 0 ? 80 : 10);
         destination.Write("\" fill=\""u8);
-        WriteColor(destination, NextColor(ref state, colors));
+        WriteColor(ref destination, NextColor(ref state, colors));
         destination.Write("\" transform=\"translate("u8);
-        WriteNumber(destination, Next(ref state, 43) - 21);
+        WriteNumber(ref destination, Next(ref state, 43) - 21);
         destination.Write(" "u8);
-        WriteNumber(destination, Next(ref state, 43) - 21);
+        WriteNumber(ref destination, Next(ref state, 43) - 21);
         destination.Write(") rotate("u8);
-        WriteNumber(destination, Next(ref state, 360));
+        WriteNumber(ref destination, Next(ref state, 360));
         destination.Write(" 40 40)\"/><circle cx=\"40\" cy=\"40\" r=\"16\" fill=\""u8);
-        WriteColor(destination, NextColor(ref state, colors));
+        WriteColor(ref destination, NextColor(ref state, colors));
         destination.Write("\" transform=\"translate("u8);
-        WriteNumber(destination, Next(ref state, 41) - 20);
+        WriteNumber(ref destination, Next(ref state, 41) - 20);
         destination.Write(" "u8);
-        WriteNumber(destination, Next(ref state, 41) - 20);
+        WriteNumber(ref destination, Next(ref state, 41) - 20);
         destination.Write(")\"/><line x1=\"0\" y1=\"40\" x2=\"80\" y2=\"40\" stroke-width=\"2\" stroke=\""u8);
-        WriteColor(destination, NextColor(ref state, colors));
+        WriteColor(ref destination, NextColor(ref state, colors));
         destination.Write("\" transform=\"translate("u8);
-        WriteNumber(destination, Next(ref state, 39) - 19);
+        WriteNumber(ref destination, Next(ref state, 39) - 19);
         destination.Write(" "u8);
-        WriteNumber(destination, Next(ref state, 39) - 19);
+        WriteNumber(ref destination, Next(ref state, 39) - 19);
         destination.Write(") rotate("u8);
-        WriteNumber(destination, Next(ref state, 360));
+        WriteNumber(ref destination, Next(ref state, 360));
         destination.Write(" 40 40)\"/>"u8);
     }
 }

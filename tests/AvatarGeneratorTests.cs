@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Globalization;
 using System.IO.Pipelines;
+using System.Security.Cryptography;
 using System.Text;
 using System.Xml.Linq;
 
@@ -11,6 +12,106 @@ public class AvatarGeneratorTests
     private const string Name = "A&B <C> \"D\" 'E' 山田 é 😀\t\r\n";
     private static readonly XNamespace Svg = "http://www.w3.org/2000/svg";
     private static readonly UTF8Encoding Utf8 = new(false, true);
+
+    [Test]
+    [Arguments(AvatarVariant.Marble, "44A9C2CE6B364FFC35BC89320EBE3808FD59CB9CF73B0A2B513B51228F998024")]
+    [Arguments(AvatarVariant.Beam, "9682C0B0B8410777BE4BC3E7378E8ED06984237F85FE880EBC85B340D0CF7C02")]
+    [Arguments(AvatarVariant.Pixel, "608B15F2BA07429CE8637E5B57EA4C31CF498EC8F8D144D9141F451329332C27")]
+    [Arguments(AvatarVariant.Sunset, "6BF538EA81EC7C5D349D903A1CB9C83DA216898ECBFC7C623F8AFCD33686D199")]
+    [Arguments(AvatarVariant.Ring, "3184AA3DCD65F966AD7F8BA0267765684C9933432D54ECF3FAF55192C575457A")]
+    [Arguments(AvatarVariant.Bauhaus, "D6C54602706B972A8C7D9ED6FBA4C7E240DDA2FBE674093F5AB4E32E1E5D9184")]
+    public async Task WriteSvg_preserves_original_bytes_in_one_span(AvatarVariant variant, string expectedHash)
+    {
+        // Hashes captured from the streaming implementation at commit 37baee7.
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        bool usedOneSpan = true;
+        uint[] colors = [0x000001, 0x00ABCD, 0xFFFFFF, 0, 0x123456, 0xFEDCBA];
+        for (int i = 0; i < 4096; i++)
+        {
+            string name = i.ToString(CultureInfo.InvariantCulture) + " " + Name;
+            var destination = new RotatingBufferWriter();
+            AvatarGenerator.WriteSvg(destination, name, variant, int.MaxValue,
+                square: (i & 1) != 0, includeTitle: (i & 2) != 0, colors: colors);
+            usedOneSpan &= destination.BufferRequests == 1 && destination.AdvanceCalls == 1;
+            hash.AppendData(destination.WrittenSpan);
+        }
+
+        await Assert.That(Convert.ToHexString(hash.GetHashAndReset())).IsEqualTo(expectedHash);
+        await Assert.That(usedOneSpan).IsTrue();
+    }
+
+    [Test]
+    [MatrixDataSource]
+    public async Task WriteSvg_batches_escaped_names_and_commits_only_written_bytes(
+        [Matrix(AvatarVariant.Marble, AvatarVariant.Beam, AvatarVariant.Pixel,
+            AvatarVariant.Sunset, AvatarVariant.Ring, AvatarVariant.Bauhaus)] AvatarVariant variant,
+        [Matrix(false, true)] bool utf8,
+        [Matrix(128, 4096)] int repetitions)
+    {
+        string name = string.Concat(Enumerable.Repeat(Name, repetitions));
+        string expected = AvatarGenerator.GetSvg(name, variant, int.MaxValue, includeTitle: true);
+        var destination = new RotatingBufferWriter();
+
+        if (utf8)
+            AvatarGenerator.WriteSvg(destination, Utf8.GetBytes(name), variant, int.MaxValue, includeTitle: true);
+        else
+            AvatarGenerator.WriteSvg(destination, name, variant, int.MaxValue, includeTitle: true);
+
+        await Assert.That(Utf8.GetString(destination.WrittenSpan)).IsEqualTo(expected);
+        await Assert.That(destination.LargestSizeHint).IsLessThanOrEqualTo(65536);
+        await Assert.That(destination.AdvanceCalls).IsEqualTo(destination.BufferRequests);
+        if (repetitions == 128)
+            await Assert.That(destination.BufferRequests).IsEqualTo(1);
+        else
+            await Assert.That(destination.BufferRequests).IsGreaterThan(1);
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task WriteSvg_validates_the_entire_name_before_requesting_a_buffer(bool utf8)
+    {
+        string name = new string('x', 65536) + '\0';
+        var destination = new FailingBufferWriter();
+
+        var exception = await Assert.That(() =>
+        {
+            if (utf8)
+                AvatarGenerator.WriteSvg(destination, Utf8.GetBytes(name));
+            else
+                AvatarGenerator.WriteSvg(destination, name);
+        }).Throws<ArgumentException>();
+
+        await Assert.That(exception!.ParamName).IsEqualTo("name");
+    }
+
+    [Test]
+    [Arguments(AvatarVariant.Marble)]
+    [Arguments(AvatarVariant.Beam)]
+    [Arguments(AvatarVariant.Pixel)]
+    [Arguments(AvatarVariant.Sunset)]
+    [Arguments(AvatarVariant.Ring)]
+    [Arguments(AvatarVariant.Bauhaus)]
+    [NotInParallel]
+    public async Task WriteSvg_does_not_allocate_after_warmup_with_a_reused_buffer(AvatarVariant variant)
+    {
+        var destination = new ArrayBufferWriter<byte>(8192);
+        for (int i = 0; i < 512; i++)
+        {
+            destination.ResetWrittenCount();
+            AvatarGenerator.WriteSvg(destination, Name, variant, includeTitle: true);
+        }
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 512; i++)
+        {
+            destination.ResetWrittenCount();
+            AvatarGenerator.WriteSvg(destination, Name, variant, includeTitle: true);
+        }
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        await Assert.That(allocated).IsEqualTo(0);
+    }
 
     [Test]
     [Arguments("Ada")]
