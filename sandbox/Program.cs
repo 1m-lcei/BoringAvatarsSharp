@@ -21,25 +21,69 @@ Directory.CreateDirectory(outputDirectory);
 AvatarVariant[] variants = Enum.GetValues<AvatarVariant>();
 XNamespace svgNamespace = "http://www.w3.org/2000/svg";
 string[] names = ["Ada Lovelace", "Grace Hopper", "山田 太郎", "A&B <C> 😀"];
+
 // Reference palette attribution and license terms are embedded in the gallery below.
 // ColorBrewer's five-color RGB values are converted to uint literals without changing their order.
 (string Label, PaletteColors Colors, string Source, string Author)[] palettes =
 [
-    ("BoringAvatars (default)", static () => [0x92A1C6, 0x146A7C, 0xF0AB3D, 0xC271B4, 0xC20D90], "https://github.com/boringdesigners/boring-avatars#props", "boringdesigners"),
-    ("Ice Cream GB", static () => [0x7C3F58, 0xEB6B6F, 0xF9A875, 0xFFF6D3], "https://lospec.com/palette-list/ice-cream-gb", "Kerrie Lake"),
-    ("Nord Aurora", static () => [0xBF616A, 0xD08770, 0xEBCB8B, 0xA3BE8C, 0xB48EAD], "https://www.nordtheme.com/docs/colors-and-palettes/", "Sven Greb"),
-    ("Nord Frost", static () => [0x8FBCBB, 0x88C0D0, 0x81A1C1, 0x5E81AC], "https://www.nordtheme.com/docs/colors-and-palettes/", "Sven Greb"),
-    ("Nord Polar Night", static () => [0x2E3440, 0x3B4252, 0x434C5E, 0x4C566A], "https://www.nordtheme.com/docs/colors-and-palettes/", "Sven Greb"),
-    ("Nord Snow Storm", static () => [0xD8DEE9, 0xE5E9F0, 0xECEFF4], "https://www.nordtheme.com/docs/colors-and-palettes/", "Sven Greb"),
-    ("ColorBrewer Set2 (5)", static () => [0x66C2A5, 0xFC8D62, 0x8DA0CB, 0xE78AC3, 0xA6D854], "https://colorbrewer2.org/?type=qualitative&scheme=Set2&n=5", "Cynthia Brewer"),
-    ("ColorBrewer Dark2 (5)", static () => [0x1B9E77, 0xD95F02, 0x7570B3, 0xE7298A, 0x66A61E], "https://colorbrewer2.org/?type=qualitative&scheme=Dark2&n=5", "Cynthia Brewer")
+    (
+        "BoringAvatars (default)",
+        static () => [0x92A1C6, 0x146A7C, 0xF0AB3D, 0xC271B4, 0xC20D90],
+        "https://github.com/boringdesigners/boring-avatars#props",
+        "boringdesigners"
+    ),
+    (
+        "Ice Cream GB",
+        static () => [0x7C3F58, 0xEB6B6F, 0xF9A875, 0xFFF6D3],
+        "https://lospec.com/palette-list/ice-cream-gb",
+        "Kerrie Lake"
+    ),
+    (
+        "Nord Aurora",
+        static () => [0xBF616A, 0xD08770, 0xEBCB8B, 0xA3BE8C, 0xB48EAD],
+        "https://www.nordtheme.com/docs/colors-and-palettes/",
+        "Sven Greb"
+    ),
+    (
+        "Nord Frost",
+        static () => [0x8FBCBB, 0x88C0D0, 0x81A1C1, 0x5E81AC],
+        "https://www.nordtheme.com/docs/colors-and-palettes/",
+        "Sven Greb"
+    ),
+    (
+        "Nord Polar Night",
+        static () => [0x2E3440, 0x3B4252, 0x434C5E, 0x4C566A],
+        "https://www.nordtheme.com/docs/colors-and-palettes/",
+        "Sven Greb"
+    ),
+    (
+        "Nord Snow Storm",
+        static () => [0xD8DEE9, 0xE5E9F0, 0xECEFF4],
+        "https://www.nordtheme.com/docs/colors-and-palettes/",
+        "Sven Greb"
+    ),
+    (
+        "ColorBrewer Set2 (5)",
+        static () => [0x66C2A5, 0xFC8D62, 0x8DA0CB, 0xE78AC3, 0xA6D854],
+        "https://colorbrewer2.org/?type=qualitative&scheme=Set2&n=5",
+        "Cynthia Brewer"
+    ),
+    (
+        "ColorBrewer Dark2 (5)",
+        static () => [0x1B9E77, 0xD95F02, 0x7570B3, 0xE7298A, 0x66A61E],
+        "https://colorbrewer2.org/?type=qualitative&scheme=Dark2&n=5",
+        "Cynthia Brewer"
+    ),
 ];
 var paletteSamples = new List<(string Label, string Name, PaletteColors Colors, bool Square)>();
 foreach (var palette in palettes)
-    foreach (bool square in new[] { false, true })
-        paletteSamples.Add(($"{palette.Label} / {(square ? "Square" : "Round")}", names[0], palette.Colors, square));
+foreach (bool square in new[] { false, true })
+    paletteSamples.Add(
+        ($"{palette.Label} / {(square ? "Square" : "Round")}", names[0], palette.Colors, square)
+    );
 
-var gallery = new StringBuilder("""
+var gallery = new StringBuilder(
+    """
 <!doctype html>
 <html lang="en">
 <head>
@@ -76,10 +120,12 @@ pre{overflow-x:auto;background:#fff;padding:16px;border-radius:8px}code{font-siz
 <p>This example uses Ice Cream GB; see its source below.</p>
 <section id="names">
 <h2>Names</h2><p>The same default palette and round outline, with four different names.</p>
-""");
+"""
+);
 int count = 0;
 WriteTable("", names.Select(name => (name, name, palettes[0].Colors, false)).ToArray());
-gallery.Append("""
+gallery.Append(
+    """
 </section>
 <section id="palettes">
 <h2>Palettes</h2>
@@ -96,25 +142,31 @@ but not every color will appear in each image. Gradients and blending can produc
 The Ice Cream GB listing credits Kerrie Lake but does not specify a separate license.
 See <a href="#palette-notices">palette credits and licenses</a>.</p>
 <div class="palettes">
-""");
+"""
+);
 foreach (var palette in palettes)
 {
     ReadOnlySpan<uint> colors = palette.Colors();
     gallery.Append($"<div class=\"palette\"><strong>{palette.Label}</strong>");
     WriteSwatches(colors);
-    gallery.Append($"<p>{colors.Length} colors · {WebUtility.HtmlEncode(palette.Author)}</p><code>");
+    gallery.Append(
+        $"<p>{colors.Length} colors · {WebUtility.HtmlEncode(palette.Author)}</p><code>"
+    );
     for (int i = 0; i < colors.Length; i++)
     {
         if (i > 0)
             gallery.Append(", ");
         gallery.Append($"0x{colors[i]:X6}");
     }
-    gallery.Append($"</code><p><a href=\"{WebUtility.HtmlEncode(palette.Source)}\">Official palette</a></p>");
+    gallery.Append(
+        $"</code><p><a href=\"{WebUtility.HtmlEncode(palette.Source)}\">Official palette</a></p>"
+    );
     gallery.Append("</div>");
 }
 gallery.Append("</div>");
 WriteTable("palette-", paletteSamples);
-gallery.Append("""
+gallery.Append(
+    """
 <details id="palette-notices">
 <summary>Palette credits and licenses</summary>
 <p>Sources and authors are linked alongside each palette above.</p>
@@ -383,18 +435,27 @@ This project does not assign an MIT license to this palette.</p>
 </pre>
 </details>
 </details>
-""");
+"""
+);
 gallery.Append("</section></main></body></html>\n");
 
 int expectedCount = variants.Length * (names.Length + paletteSamples.Count);
 if (count != expectedCount)
     throw new InvalidOperationException($"Expected {expectedCount} samples, generated {count}.");
-File.WriteAllText(Path.Combine(outputDirectory, "index.html"), gallery.ToString().ReplaceLineEndings("\n"));
+File.WriteAllText(
+    Path.Combine(outputDirectory, "index.html"),
+    gallery.ToString().ReplaceLineEndings("\n")
+);
 Console.WriteLine($"Wrote and validated {count} SVG files: {outputDirectory}");
 
-void WriteTable(string filePrefix, IReadOnlyList<(string Label, string Name, PaletteColors Colors, bool Square)> samples)
+void WriteTable(
+    string filePrefix,
+    IReadOnlyList<(string Label, string Name, PaletteColors Colors, bool Square)> samples
+)
 {
-    gallery.Append("<div class=\"table-scroll\" role=\"region\" aria-label=\"Avatar comparison\" tabindex=\"0\"><table><thead><tr><th scope=\"col\">Variant</th>");
+    gallery.Append(
+        "<div class=\"table-scroll\" role=\"region\" aria-label=\"Avatar comparison\" tabindex=\"0\"><table><thead><tr><th scope=\"col\">Variant</th>"
+    );
     foreach (var sample in samples)
     {
         gallery.Append($"<th scope=\"col\">{WebUtility.HtmlEncode(sample.Label)}");
@@ -410,35 +471,60 @@ void WriteTable(string filePrefix, IReadOnlyList<(string Label, string Name, Pal
         {
             var sample = samples[i];
             ReadOnlySpan<uint> colors = sample.Colors();
-            string svg = AvatarGenerator.GetSvg(sample.Name, variant, size: 88,
-                square: sample.Square, includeTitle: true, colors: colors);
+            string svg = AvatarGenerator.GetSvg(
+                sample.Name,
+                variant,
+                size: 88,
+                square: sample.Square,
+                includeTitle: true,
+                colors: colors
+            );
             var buffer = new ArrayBufferWriter<byte>();
-            AvatarGenerator.WriteSvg(buffer, Encoding.UTF8.GetBytes(sample.Name), variant, size: 88,
-                square: sample.Square, includeTitle: true, colors: colors);
+            AvatarGenerator.WriteSvg(
+                buffer,
+                Encoding.UTF8.GetBytes(sample.Name),
+                variant,
+                size: 88,
+                square: sample.Square,
+                includeTitle: true,
+                colors: colors
+            );
             XElement root = XElement.Parse(svg);
-            XElement clip = root.Descendants(svgNamespace + "clipPath").Single().Element(svgNamespace + "rect")!;
+            XElement clip = root.Descendants(svgNamespace + "clipPath")
+                .Single()
+                .Element(svgNamespace + "rect")!;
             var allowedPaints = new HashSet<string>();
             foreach (uint color in colors)
                 allowedPaints.Add($"#{color:X6}");
             if (variant == AvatarVariant.Beam)
                 allowedPaints.UnionWith(["#000000", "#FFFFFF"]);
-            string[] paints = root.Descendants().Attributes()
+            string[] paints = root.Descendants()
+                .Attributes()
                 .Where(attribute => attribute.Name.LocalName is "fill" or "stroke" or "stop-color")
-                .Select(attribute => attribute.Value).Where(value => value.StartsWith('#')).ToArray();
-            if (svg != Encoding.UTF8.GetString(buffer.WrittenSpan)
+                .Select(attribute => attribute.Value)
+                .Where(value => value.StartsWith('#'))
+                .ToArray();
+            if (
+                svg != Encoding.UTF8.GetString(buffer.WrittenSpan)
                 || root.Name != svgNamespace + "svg"
                 || (string?)root.Attribute("aria-label") != sample.Name
                 || (string?)root.Element(svgNamespace + "title") != sample.Name
                 || (string?)root.Attribute("width") != "88"
                 || (string?)root.Attribute("height") != "88"
-                || paints.Length == 0 || paints.Any(paint => !allowedPaints.Contains(paint))
-                || (clip.Attribute("rx") is null) != sample.Square)
-                throw new InvalidOperationException($"Invalid output for {variant}, {sample.Label}.");
+                || paints.Length == 0
+                || paints.Any(paint => !allowedPaints.Contains(paint))
+                || (clip.Attribute("rx") is null) != sample.Square
+            )
+                throw new InvalidOperationException(
+                    $"Invalid output for {variant}, {sample.Label}."
+                );
 
             string fileName = $"{variant.ToString().ToLowerInvariant()}-{filePrefix}{i + 1}.svg";
             File.WriteAllText(Path.Combine(outputDirectory, fileName), svg);
             string alt = WebUtility.HtmlEncode($"{variant}: {sample.Name}, {sample.Label}");
-            gallery.Append($"<td><a href=\"{fileName}\"><img src=\"{fileName}\" width=\"88\" height=\"88\" alt=\"{alt}\"></a></td>");
+            gallery.Append(
+                $"<td><a href=\"{fileName}\"><img src=\"{fileName}\" width=\"88\" height=\"88\" alt=\"{alt}\"></a></td>"
+            );
             count++;
         }
         gallery.Append("</tr>");
@@ -454,6 +540,7 @@ void WriteSwatches(ReadOnlySpan<uint> colors)
     gallery.Append("</div>");
 }
 
-static string SourceDirectory([CallerFilePath] string sourceFile = "") => Path.GetDirectoryName(sourceFile)!;
+static string SourceDirectory([CallerFilePath] string sourceFile = "") =>
+    Path.GetDirectoryName(sourceFile)!;
 
 delegate ReadOnlySpan<uint> PaletteColors();

@@ -25,6 +25,7 @@
 
 using System;
 using System.Buffers;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text;
 using System.Text.Unicode;
@@ -36,16 +37,21 @@ public enum AvatarVariant
 {
     /// <summary>Soft overlapping shapes.</summary>
     Marble,
+
     /// <summary>A geometric face.</summary>
     Beam,
+
     /// <summary>A grid of colored cells.</summary>
     Pixel,
+
     /// <summary>Two vertical gradients.</summary>
     Sunset,
+
     /// <summary>Concentric colored arcs.</summary>
     Ring,
+
     /// <summary>Layered geometric shapes.</summary>
-    Bauhaus
+    Bauhaus,
 }
 
 /// <summary>Generates self-contained SVG avatars from names.</summary>
@@ -68,7 +74,8 @@ public static class AvatarGenerator
         int size = 40,
         bool square = false,
         bool includeTitle = false,
-        ReadOnlySpan<uint> colors = default)
+        ReadOnlySpan<uint> colors = default
+    )
     {
         ValidateOptions(variant, size, colors);
         ulong seed = ValidateAndHashName(name, out long escapedLength);
@@ -103,7 +110,8 @@ public static class AvatarGenerator
         int size = 40,
         bool square = false,
         bool includeTitle = false,
-        ReadOnlySpan<uint> colors = default)
+        ReadOnlySpan<uint> colors = default
+    )
     {
         byte[]? rented = null;
         try
@@ -136,14 +144,18 @@ public static class AvatarGenerator
         int size = 40,
         bool square = false,
         bool includeTitle = false,
-        ReadOnlySpan<uint> colors = default)
+        ReadOnlySpan<uint> colors = default
+    )
     {
         ArgumentNullException.ThrowIfNull(destination);
         ValidateOptions(variant, size, colors);
         ulong seed = ValidateAndHashName(name, out long escapedLength);
         long capacity = GetMaxSvgLength(variant, includeTitle, escapedLength);
         // Bound contiguous requests for exceptionally long names while batching ordinary SVGs.
-        var output = new SvgWriter(destination.GetSpan((int)Math.Min(capacity, 65536)), destination);
+        var output = new SvgWriter(
+            destination.GetSpan((int)Math.Min(capacity, 65536)),
+            destination
+        );
         WriteSvgCore(ref output, name, seed, variant, size, square, includeTitle, colors);
         destination.Advance(output.WrittenCount);
     }
@@ -162,8 +174,15 @@ public static class AvatarGenerator
         }
     }
 
-    private static long GetMaxSvgLength(AvatarVariant variant, bool includeTitle, long escapedLength)
+    private static long GetMaxSvgLength(
+        AvatarVariant variant,
+        bool includeTitle,
+        long escapedLength
+    )
     {
+        [DoesNotReturn]
+        static int ThrowInvalidEnum() => throw new ArgumentOutOfRangeException(nameof(variant));
+
         // The frame bound includes 10-digit sizes and round clipping; recheck when SVG output changes.
         int drawingLength = variant switch
         {
@@ -172,14 +191,22 @@ public static class AvatarGenerator
             AvatarVariant.Pixel => 4000, // Frame 236 + drawing 3760 = 3996 bytes.
             AvatarVariant.Sunset => 680, // Frame 236 + drawing 437 = 673 bytes.
             AvatarVariant.Ring => 688, // Frame 236 + drawing 446 = 682 bytes.
-            _ => 600 // Frame 236 + drawing 352 = 588 bytes (Bauhaus).
+            AvatarVariant.Bauhaus => 600, // Frame 236 + drawing 352 = 588 bytes.
+            _ => ThrowInvalidEnum(),
         };
         return drawingLength + escapedLength * (includeTitle ? 2 : 1) + (includeTitle ? 15 : 0);
     }
 
     private static void WriteSvgCore(
-        ref SvgWriter destination, ReadOnlySpan<byte> name, ulong seed, AvatarVariant variant,
-        int size, bool square, bool includeTitle, ReadOnlySpan<uint> colors)
+        ref SvgWriter destination,
+        ReadOnlySpan<byte> name,
+        ulong seed,
+        AvatarVariant variant,
+        int size,
+        bool square,
+        bool includeTitle,
+        ReadOnlySpan<uint> colors
+    )
     {
         if (colors.IsEmpty)
         {
@@ -190,7 +217,7 @@ public static class AvatarGenerator
         {
             AvatarVariant.Beam => 36,
             AvatarVariant.Ring => 90,
-            _ => 80
+            _ => 80,
         };
 
         destination.Write("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 "u8);
@@ -224,12 +251,24 @@ public static class AvatarGenerator
 
         switch (variant)
         {
-            case AvatarVariant.Marble: Marble(ref destination, seed, colors); break;
-            case AvatarVariant.Beam: Beam(ref destination, seed, colors); break;
-            case AvatarVariant.Pixel: Pixel(ref destination, seed, colors); break;
-            case AvatarVariant.Sunset: Sunset(ref destination, seed, colors); break;
-            case AvatarVariant.Ring: Ring(ref destination, seed, colors); break;
-            case AvatarVariant.Bauhaus: Bauhaus(ref destination, seed, colors); break;
+            case AvatarVariant.Marble:
+                Marble(ref destination, seed, colors);
+                break;
+            case AvatarVariant.Beam:
+                Beam(ref destination, seed, colors);
+                break;
+            case AvatarVariant.Pixel:
+                Pixel(ref destination, seed, colors);
+                break;
+            case AvatarVariant.Sunset:
+                Sunset(ref destination, seed, colors);
+                break;
+            case AvatarVariant.Ring:
+                Ring(ref destination, seed, colors);
+                break;
+            case AvatarVariant.Bauhaus:
+                Bauhaus(ref destination, seed, colors);
+                break;
         }
 
         destination.Write("</g></svg>"u8);
@@ -251,7 +290,8 @@ public static class AvatarGenerator
         int size = 40,
         bool square = false,
         bool includeTitle = false,
-        ReadOnlySpan<uint> colors = default)
+        ReadOnlySpan<uint> colors = default
+    )
     {
         ArgumentNullException.ThrowIfNull(destination);
         byte[]? rented = null;
@@ -269,12 +309,19 @@ public static class AvatarGenerator
         }
     }
 
-    private static ReadOnlySpan<byte> EncodeName(ReadOnlySpan<char> name, Span<byte> scratch, out byte[]? rented)
+    private static ReadOnlySpan<byte> EncodeName(
+        ReadOnlySpan<char> name,
+        Span<byte> scratch,
+        out byte[]? rented
+    )
     {
         int byteCount = Encoding.UTF8.GetByteCount(name);
         rented = byteCount > scratch.Length ? ArrayPool<byte>.Shared.Rent(byteCount) : null;
         Span<byte> utf8Name = rented is null ? scratch : rented;
-        if (Utf8.FromUtf16(name, utf8Name, out _, out int written, replaceInvalidSequences: false) != OperationStatus.Done)
+        if (
+            Utf8.FromUtf16(name, utf8Name, out _, out int written, replaceInvalidSequences: false)
+            != OperationStatus.Done
+        )
         {
             throw new ArgumentException("Name contains invalid UTF-16.", nameof(name));
         }
@@ -296,7 +343,10 @@ public static class AvatarGenerator
             int value = rune.Value;
             if (value < 0x20 && value is not ('\t' or '\n' or '\r') || value is 0xFFFE or 0xFFFF)
             {
-                throw new ArgumentException("Name contains an invalid XML character.", nameof(name));
+                throw new ArgumentException(
+                    "Name contains an invalid XML character.",
+                    nameof(name)
+                );
             }
 
             escapedLength += value switch
@@ -304,7 +354,7 @@ public static class AvatarGenerator
                 '&' or '\t' or '\n' or '\r' => 4,
                 '<' or '>' => 3,
                 '"' or '\'' => 5,
-                _ => 0
+                _ => 0,
             };
 
             foreach (byte b in name[..consumed])
@@ -391,12 +441,23 @@ public static class AvatarGenerator
         WriteNumber(ref destination, color, "X6");
     }
 
-    private static void WriteNumber<T>(ref SvgWriter destination, T value, ReadOnlySpan<char> format = default)
+    private static void WriteNumber<T>(
+        ref SvgWriter destination,
+        T value,
+        ReadOnlySpan<char> format = default
+    )
         where T : IUtf8SpanFormattable
     {
         int sizeHint = 32;
         int written;
-        while (!value.TryFormat(destination.FreeSpan, out written, format, CultureInfo.InvariantCulture))
+        while (
+            !value.TryFormat(
+                destination.FreeSpan,
+                out written,
+                format,
+                CultureInfo.InvariantCulture
+            )
+        )
         {
             destination.GetNextSpan(sizeHint);
             sizeHint = checked(sizeHint * 2);
@@ -420,7 +481,7 @@ public static class AvatarGenerator
                 (byte)'\t' => "&#x9;"u8,
                 (byte)'\n' => "&#xA;"u8,
                 (byte)'\r' => "&#xD;"u8,
-                _ => default
+                _ => default,
             };
             if (escape.IsEmpty)
             {
@@ -442,9 +503,11 @@ public static class AvatarGenerator
         for (int i = 0; i < 2; i++)
         {
             destination.Write("<path d=\""u8);
-            destination.Write(i == 0
-                ? "M32.414 59.35L50.376 70.5H72.5v-71H33.728L26.5 13.381l19.057 27.08L32.414 59.35z"u8
-                : "M22.216 24L0 46.75l14.108 38.129L78 86l-3.081-59.276-22.378 4.005 12.972 20.186-23.35 27.395L22.215 24z"u8);
+            destination.Write(
+                i == 0
+                    ? "M32.414 59.35L50.376 70.5H72.5v-71H33.728L26.5 13.381l19.057 27.08L32.414 59.35z"u8
+                    : "M22.216 24L0 46.75l14.108 38.129L78 86l-3.081-59.276-22.378 4.005 12.972 20.186-23.35 27.395L22.215 24z"u8
+            );
             destination.Write("\" fill=\""u8);
             WriteColor(ref destination, NextColor(ref state, colors));
             destination.Write("\" filter=\"url(#f)\""u8);
@@ -460,16 +523,20 @@ public static class AvatarGenerator
             destination.Write(") rotate("u8);
             WriteNumber(ref destination, Next(ref state, 360));
             destination.Write(" 40 40) scale("u8);
-            destination.Write(Next(ref state, 4) switch
-            {
-                0 => "1.2"u8,
-                1 => "1.3"u8,
-                2 => "1.4"u8,
-                _ => "1.5"u8
-            });
+            destination.Write(
+                Next(ref state, 4) switch
+                {
+                    0 => "1.2"u8,
+                    1 => "1.3"u8,
+                    2 => "1.4"u8,
+                    _ => "1.5"u8,
+                }
+            );
             destination.Write(")\"/>"u8);
         }
-        destination.Write("<defs><filter id=\"f\" x=\"-40\" y=\"-40\" width=\"160\" height=\"160\" filterUnits=\"userSpaceOnUse\"><feGaussianBlur stdDeviation=\"7\"/></filter></defs>"u8);
+        destination.Write(
+            "<defs><filter id=\"f\" x=\"-40\" y=\"-40\" width=\"160\" height=\"160\" filterUnits=\"userSpaceOnUse\"><feGaussianBlur stdDeviation=\"7\"/></filter></defs>"u8
+        );
     }
 
     private static void Beam(ref SvgWriter destination, ulong state, ReadOnlySpan<uint> colors)
@@ -491,12 +558,14 @@ public static class AvatarGenerator
         destination.Write(") rotate("u8);
         WriteNumber(ref destination, Next(ref state, 360));
         destination.Write(" 18 18) scale("u8);
-        destination.Write(Next(ref state, 3) switch
-        {
-            0 => "1"u8,
-            1 => "1.1"u8,
-            _ => "1.2"u8
-        });
+        destination.Write(
+            Next(ref state, 3) switch
+            {
+                0 => "1"u8,
+                1 => "1.1"u8,
+                _ => "1.2"u8,
+            }
+        );
         destination.Write(")\"/><g transform=\"translate("u8);
         WriteNumber(ref destination, x / 2);
         destination.Write(" "u8);
@@ -559,7 +628,9 @@ public static class AvatarGenerator
 
     private static void Sunset(ref SvgWriter destination, ulong state, ReadOnlySpan<uint> colors)
     {
-        destination.Write("<path d=\"M0 0h80v40H0z\" fill=\"url(#g0)\"/><path d=\"M0 40h80v40H0z\" fill=\"url(#g1)\"/><defs>"u8);
+        destination.Write(
+            "<path d=\"M0 0h80v40H0z\" fill=\"url(#g0)\"/><path d=\"M0 40h80v40H0z\" fill=\"url(#g1)\"/><defs>"u8
+        );
         for (int i = 0; i < 2; i++)
         {
             destination.Write("<linearGradient id=\"g"u8);
@@ -624,7 +695,9 @@ public static class AvatarGenerator
         WriteNumber(ref destination, Next(ref state, 41) - 20);
         destination.Write(" "u8);
         WriteNumber(ref destination, Next(ref state, 41) - 20);
-        destination.Write(")\"/><line x1=\"0\" y1=\"40\" x2=\"80\" y2=\"40\" stroke-width=\"2\" stroke=\""u8);
+        destination.Write(
+            ")\"/><line x1=\"0\" y1=\"40\" x2=\"80\" y2=\"40\" stroke-width=\"2\" stroke=\""u8
+        );
         WriteColor(ref destination, NextColor(ref state, colors));
         destination.Write("\" transform=\"translate("u8);
         WriteNumber(ref destination, Next(ref state, 39) - 19);

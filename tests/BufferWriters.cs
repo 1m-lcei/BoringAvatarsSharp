@@ -38,6 +38,8 @@ internal sealed class RotatingBufferWriter : IBufferWriter<byte>
 internal sealed class FailingBufferWriter : IBufferWriter<byte>
 {
     public Memory<byte> GetMemory(int sizeHint = 0) => throw new IOException("Destination failed.");
+
     public Span<byte> GetSpan(int sizeHint = 0) => throw new IOException("Destination failed.");
+
     public void Advance(int count) => throw new IOException("Destination failed.");
 }
